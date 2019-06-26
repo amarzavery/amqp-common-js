@@ -60,6 +60,14 @@ export enum ConditionErrorNameMapper {
    */
   "amqp:not-found" = "ServiceCommunicationError",
   /**
+   * Error is thrown when the message is not found.
+   */
+  "com.microsoft:message-not-found" = "MessageNotFoundError",
+  /**
+   * Error is thrown when relay is not found.
+   */
+  "com.microsoft:relay-not-found" = "RelayNotFoundError",
+  /**
    * Error is thrown when a feature is not implemented yet but the placeholder is present.
    */
   "amqp:not-implemented" = "NotImplementedError",
@@ -229,6 +237,14 @@ export enum ErrorNameConditionMapper {
    * Error for signaling general communication errors related to messaging operations.
    */
   ServiceCommunicationError = "amqp:not-found",
+  /**
+   * Error is thrown when message is not found.
+   */
+  MessageNotFoundError = "com.microsoft:message-not-found",
+  /**
+   * Error is thrown when relay is not found.
+   */
+  RelayNotFoundError = "com.microsoft:relay-not-found",
   /**
    * Error is thrown when a feature is not implemented yet but the placeholder is present.
    */

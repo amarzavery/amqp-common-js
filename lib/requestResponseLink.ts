@@ -6,10 +6,19 @@ import * as Constants from "./util/constants";
 import { retry, RetryConfig, RetryOperationType } from "./retry";
 import {
   Session, Connection, Sender, Receiver, Message as AmqpMessage, EventContext, AmqpError,
-  SenderOptions, ReceiverOptions, ReceiverEvents, ReqResLink
+  SenderOptions, ReceiverOptions, ReceiverEvents, ReqResLink, Delivery
 } from "rhea-promise";
 import { translate, ConditionStatusMapper } from "./errors";
 import * as log from "./log";
+
+/**
+ * Describes the response message that will be returned when a request is sent.
+ * @interface AmqpResponseMessage
+ */
+export interface AmqpResponseMessage {
+  message: AmqpMessage;
+  delivery: Delivery;
+}
 
 /**
  * Describes the options that can be specified while sending a request.
@@ -76,7 +85,7 @@ export class RequestResponseLink implements ReqResLink {
    * @param {SendRequestOptions} [options] Options that can be provided while sending a request.
    * @returns {Promise<Message>} Promise<Message> The AMQP (response) message.
    */
-  sendRequest(request: AmqpMessage, options?: SendRequestOptions): Promise<AmqpMessage> {
+  sendRequest(request: AmqpMessage, options?: SendRequestOptions): Promise<AmqpResponseMessage> {
     if (!request) {
       throw new Error("request is a required parameter and must be of type 'object'.");
     }
@@ -89,36 +98,46 @@ export class RequestResponseLink implements ReqResLink {
       options.timeoutInSeconds = 10;
     }
 
-    const sendRequestPromise: Promise<AmqpMessage> = new Promise<AmqpMessage>((resolve: any, reject: any) => {
+    const sendRequestPromise: Promise<AmqpResponseMessage> = new Promise<AmqpResponseMessage>((resolve: any, reject: any) => {
       let waitTimer: any;
       let timeOver: boolean = false;
-
+      type NormalizedInfo = {
+        statusCode: number;
+        statusDescription: string;
+        errorCondition: string;
+      };
+      const getCodeDescriptionAndError = (props: any): NormalizedInfo => {
+        if (!props) props = {};
+        return {
+          statusCode: (props[Constants.statusCode] || props.statusCode) as number,
+          statusDescription: (props[Constants.statusDescription] || props.statusDescription) as string,
+          errorCondition: (props[Constants.errorCondition] || props.errorCondition) as string
+        };
+      };
       const messageCallback = (context: EventContext) => {
         // remove the event listener as this will be registered next time when someone makes a request.
         this.receiver.removeListener(ReceiverEvents.message, messageCallback);
-        const code: number = context.message!.application_properties![Constants.statusCode];
-        const desc: string = context.message!.application_properties![Constants.statusDescription];
-        const errorCondition: string | undefined = context.message!.application_properties![Constants.errorCondition];
+        const info = getCodeDescriptionAndError(context.message!.application_properties);
         const responseCorrelationId = context.message!.correlation_id;
         log.reqres("[%s] %s response: ", this.connection.id, request.to || "$management", context.message);
-        if (code > 199 && code < 300) {
+        if (info.statusCode > 199 && info.statusCode < 300) {
           if (request.message_id === responseCorrelationId || request.correlation_id === responseCorrelationId) {
             if (!timeOver) {
               clearTimeout(waitTimer);
             }
             log.reqres("[%s] request-messageId | '%s' == '%s' | response-correlationId.",
               this.connection.id, request.message_id, responseCorrelationId);
-            return resolve(context.message);
+            return resolve({ message: context.message, delivery: context.delivery });
           } else {
             log.error("[%s] request-messageId | '%s' != '%s' | response-correlationId. " +
               "Hence dropping this response and waiting for the next one.",
               this.connection.id, request.message_id, responseCorrelationId);
           }
         } else {
-          const condition = errorCondition || ConditionStatusMapper[code] || "amqp:internal-error";
+          const condition = info.errorCondition || ConditionStatusMapper[info.statusCode] || "amqp:internal-error";
           const e: AmqpError = {
             condition: condition,
-            description: desc
+            description: info.statusDescription
           };
           const error = translate(e);
           log.error(error);
@@ -144,7 +163,7 @@ export class RequestResponseLink implements ReqResLink {
       log.reqres("[%s] %s request sent: %O", this.connection.id, request.to || "$managment", request);
       this.sender.send(request);
     });
-    const config: RetryConfig<AmqpMessage> = {
+    const config: RetryConfig<AmqpResponseMessage> = {
       operation: () => sendRequestPromise,
       connectionId: this.connection.id,
       operationType: request.to && request.to === Constants.cbsEndpoint
@@ -153,7 +172,7 @@ export class RequestResponseLink implements ReqResLink {
       delayInSeconds: options.delayInSeconds,
       times: options.times
     };
-    return retry<AmqpMessage>(config);
+    return retry<AmqpResponseMessage>(config);
   }
 
   /**
